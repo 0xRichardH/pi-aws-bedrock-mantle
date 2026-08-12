@@ -28,6 +28,7 @@ import { Sha256 } from "@aws-crypto/sha256-js";
 import { fromIni, fromNodeProviderChain } from "@aws-sdk/credential-providers";
 import { SignatureV4 } from "@smithy/signature-v4";
 import { log } from "./log.js";
+import { projectHeaders, projectId } from "./config.js";
 
 /**
  * Bound proxy ports for the two regions. Used both to construct per-model
@@ -56,8 +57,10 @@ export interface PiModelConfig {
 }
 
 interface CachedModels {
-  version: 2;
+  version: 3;
   generatedAt: number;
+  /** Project whose model list was discovered; null means the account default. */
+  projectId: string | null;
   /**
    * Cached entries store baseUrls relative to a port placeholder rather than
    * the literal port that was bound at the time of write — see
@@ -71,7 +74,7 @@ interface CachedModels {
   models: PiModelConfig[];
 }
 
-const CACHE_VERSION = 2;
+const CACHE_VERSION = 3;
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const CACHE_ENV = "BEDROCK_MANTLE_MODEL_CACHE";
 const CMH_PLACEHOLDER = "{{CMH_PORT}}";
@@ -113,6 +116,7 @@ function parseCachedModels(raw: string): CachedModels | null {
     const parsed = JSON.parse(raw) as Partial<CachedModels>;
     if (parsed.version !== CACHE_VERSION) return null;
     if (typeof parsed.generatedAt !== "number") return null;
+    if (parsed.projectId !== (projectId() ?? null)) return null;
     const want = requestedPorts();
     if (parsed.proxyPorts?.cmh !== want.cmh || parsed.proxyPorts?.iad !== want.iad) return null;
     if (!Array.isArray(parsed.models) || !parsed.models.every(isModelConfig)) return null;
@@ -182,6 +186,7 @@ export function writeCachedModels(models: PiModelConfig[]): void {
   writeFileSync(tmp, JSON.stringify({
     version: CACHE_VERSION,
     generatedAt: Date.now(),
+    projectId: projectId() ?? null,
     proxyPorts: requestedPorts(),
     models: sanitized,
   }, null, 2));
@@ -383,7 +388,7 @@ async function fetchRegionModels(region: string): Promise<string[]> {
   const signed = await signer.sign({
     method: "GET", protocol: "https:",
     hostname: host, path: "/v1/models",
-    headers: { host }, body: "",
+    headers: { host, ...projectHeaders("/v1/models") }, body: "",
   });
   const res = await fetch(`https://${host}/v1/models`, { headers: signed.headers as Record<string, string> });
   if (!res.ok) throw new Error(`${region}: HTTP ${res.status}`);

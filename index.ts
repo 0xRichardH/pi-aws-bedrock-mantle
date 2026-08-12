@@ -32,6 +32,7 @@ import {
   type SigningProxy,
 } from "./proxy.js";
 import { log } from "./log.js";
+import { projectId } from "./config.js";
 
 interface ProxySetup {
   cmh: SigningProxy | null;
@@ -111,6 +112,7 @@ export default async function bedrockMantleExtension(pi: ExtensionAPI): Promise<
     cmh_port: setup.cmh?.port,
     iad_port: setup.iad?.port,
     profile: profile ?? "default-credential-chain",
+    project_id: projectId() ?? "default",
   });
 
   // Register from the cache/fallback synchronously so the model list is

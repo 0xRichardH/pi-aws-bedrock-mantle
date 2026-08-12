@@ -30,12 +30,14 @@ function installDummyAwsEnv() {
     AWS_SESSION_TOKEN: process.env.AWS_SESSION_TOKEN,
     AWS_PROFILE: process.env.AWS_PROFILE,
     BEDROCK_MANTLE_AWS_PROFILE: process.env.BEDROCK_MANTLE_AWS_PROFILE,
+    BEDROCK_MANTLE_PROJECT_ID: process.env.BEDROCK_MANTLE_PROJECT_ID,
   };
   process.env.AWS_ACCESS_KEY_ID = "test";
   process.env.AWS_SECRET_ACCESS_KEY = "test";
   delete process.env.AWS_SESSION_TOKEN;
   delete process.env.AWS_PROFILE;
   delete process.env.BEDROCK_MANTLE_AWS_PROFILE;
+  delete process.env.BEDROCK_MANTLE_PROJECT_ID;
   return () => {
     for (const [key, value] of Object.entries(savedEnv)) {
       if (value === undefined) delete process.env[key];
@@ -117,6 +119,63 @@ describe("signAndForward", () => {
       assert.equal(capturedHeaders?.["x-passthrough"], "yes");
       // Body bytes must reach upstream.
       assert.ok(capturedBody, "expected a body on the forwarded request");
+    } finally {
+      globalThis.fetch = originalFetch;
+      restoreEnv();
+    }
+  });
+
+  test("adds and signs the configured project header for each API surface", async () => {
+    const restoreEnv = installDummyAwsEnv();
+    const originalFetch = globalThis.fetch;
+    const captured = [];
+    process.env.BEDROCK_MANTLE_PROJECT_ID = "proj_stbnz3nemrsrofpgdzq6";
+
+    globalThis.fetch = async (_url, init) => {
+      captured.push(init?.headers);
+      return new Response("ok", { status: 200 });
+    };
+
+    try {
+      await signAndForward({
+        path: "/openai/v1/responses",
+        body: "{}",
+        region: "us-east-1",
+      });
+      await signAndForward({
+        path: "/anthropic/v1/messages",
+        body: "{}",
+        region: "us-east-1",
+      });
+
+      assert.equal(captured[0]?.["openai-project"], "proj_stbnz3nemrsrofpgdzq6");
+      assert.match(captured[0]?.authorization ?? "", /SignedHeaders=.*openai-project/);
+      assert.equal(captured[1]?.["anthropic-workspace-id"], "proj_stbnz3nemrsrofpgdzq6");
+      assert.match(captured[1]?.authorization ?? "", /SignedHeaders=.*anthropic-workspace-id/);
+    } finally {
+      globalThis.fetch = originalFetch;
+      restoreEnv();
+    }
+  });
+
+  test("allows caller-supplied project headers when no project is configured", async () => {
+    const restoreEnv = installDummyAwsEnv();
+    const originalFetch = globalThis.fetch;
+    let captured;
+
+    globalThis.fetch = async (_url, init) => {
+      captured = init?.headers;
+      return new Response("ok", { status: 200 });
+    };
+
+    try {
+      await signAndForward({
+        path: "/v1/chat/completions",
+        headers: { "OpenAI-Project": "proj_caller" },
+        body: "{}",
+        region: "us-east-1",
+      });
+      assert.equal(captured?.["openai-project"], "proj_caller");
     } finally {
       globalThis.fetch = originalFetch;
       restoreEnv();
@@ -385,6 +444,7 @@ describe("image format normalisation", () => {
   // that was actually sent, without making a real network call.
   function withBodyCapture(fn) {
     let capturedBody;
+    const restoreEnv = installDummyAwsEnv();
     const orig = globalThis.fetch;
     globalThis.fetch = async (_url, init) => {
       capturedBody = init?.body;
@@ -393,7 +453,10 @@ describe("image format normalisation", () => {
         { status: 200, headers: { "content-type": "text/event-stream" } }
       );
     };
-    return fn().finally(() => { globalThis.fetch = orig; }).then((r) => ({ result: r, capturedBody }));
+    return fn().finally(() => {
+      globalThis.fetch = orig;
+      restoreEnv();
+    }).then((r) => ({ result: r, capturedBody }));
   }
 
   test("data-URL image_url string is rewritten to source block before signing", async () => {

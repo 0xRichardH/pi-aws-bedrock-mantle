@@ -27,7 +27,8 @@ import { Sha256 } from "@aws-crypto/sha256-js";
 import { fromIni, fromNodeProviderChain } from "@aws-sdk/credential-providers";
 import { SignatureV4 } from "@smithy/signature-v4";
 import { log } from "./log.js";
-const CACHE_VERSION = 2;
+import { projectHeaders, projectId } from "./config.js";
+const CACHE_VERSION = 3;
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const CACHE_ENV = "BEDROCK_MANTLE_MODEL_CACHE";
 const CMH_PLACEHOLDER = "{{CMH_PORT}}";
@@ -68,6 +69,8 @@ function parseCachedModels(raw) {
         if (parsed.version !== CACHE_VERSION)
             return null;
         if (typeof parsed.generatedAt !== "number")
+            return null;
+        if (parsed.projectId !== (projectId() ?? null))
             return null;
         const want = requestedPorts();
         if (parsed.proxyPorts?.cmh !== want.cmh || parsed.proxyPorts?.iad !== want.iad)
@@ -138,6 +141,7 @@ export function writeCachedModels(models) {
     writeFileSync(tmp, JSON.stringify({
         version: CACHE_VERSION,
         generatedAt: Date.now(),
+        projectId: projectId() ?? null,
         proxyPorts: requestedPorts(),
         models: sanitized,
     }, null, 2));
@@ -306,7 +310,7 @@ async function fetchRegionModels(region) {
     const signed = await signer.sign({
         method: "GET", protocol: "https:",
         hostname: host, path: "/v1/models",
-        headers: { host }, body: "",
+        headers: { host, ...projectHeaders("/v1/models") }, body: "",
     });
     const res = await fetch(`https://${host}/v1/models`, { headers: signed.headers });
     if (!res.ok)

@@ -36,6 +36,7 @@ function withFakeAwsCredentials() {
   rmSync(process.env.BEDROCK_MANTLE_MODEL_CACHE, { force: true });
   delete process.env.AWS_PROFILE;
   delete process.env.BEDROCK_MANTLE_AWS_PROFILE;
+  delete process.env.BEDROCK_MANTLE_PROJECT_ID;
   // Reset port pins so the cache key is consistent across tests.
   delete process.env.BEDROCK_MANTLE_PROXY_PORT_CMH;
   delete process.env.BEDROCK_MANTLE_PROXY_PORT_IAD;
@@ -44,7 +45,7 @@ function withFakeAwsCredentials() {
 async function withMockedFetch(resolver, fn) {
   withFakeAwsCredentials();
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = async (url) => resolver(String(url));
+  globalThis.fetch = async (url, init) => resolver(String(url), init);
   try {
     return await fn();
   } finally {
@@ -152,6 +153,30 @@ test("unknown model inference keeps vision and reasoning heuristics explicit", a
     assert.equal(models.find((model) => model.id === "moonshotai.future-thinking")?.reasoning, true);
     assert.deepEqual(models.find((model) => model.id === "openai.gpt-5.6")?.thinkingLevelMap, { off: null, xhigh: "xhigh" });
   });
+});
+
+test("model discovery sends and signs the configured project ID", async () => {
+  process.env.BEDROCK_MANTLE_PROJECT_ID = "proj_stbnz3nemrsrofpgdzq6";
+  const capturedHeaders = [];
+
+  await withMockedFetch((_url, init) => {
+    capturedHeaders.push(init?.headers);
+    return new Response(JSON.stringify({ data: [{ id: "openai.gpt-oss-120b" }] }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  }, async () => {
+    // withMockedFetch resets env, so set project scoping inside its callback.
+    process.env.BEDROCK_MANTLE_PROJECT_ID = "proj_stbnz3nemrsrofpgdzq6";
+    await fetchModels(TEST_PORTS);
+  });
+
+  assert.equal(capturedHeaders.length, 2);
+  for (const headers of capturedHeaders) {
+    assert.equal(headers?.["openai-project"], "proj_stbnz3nemrsrofpgdzq6");
+    assert.match(headers?.authorization ?? "", /SignedHeaders=.*openai-project/);
+  }
+  delete process.env.BEDROCK_MANTLE_PROJECT_ID;
 });
 
 test("fetchModels merges successful regional discovery and ignores a partial regional failure", async () => {

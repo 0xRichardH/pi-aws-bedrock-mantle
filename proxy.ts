@@ -27,6 +27,7 @@ import { SignatureV4 } from "@smithy/signature-v4";
 import { log, newRequestId } from "./log.js";
 import { maybeDetectEmptyCompletion } from "./empty-completion.js";
 import { fetchWithEmptyRetry, fetchWithStreamingRetry, retryMode } from "./retry.js";
+import { projectHeaders } from "./config.js";
 
 // ─── Port parsing (kept for backward compat with pinned env overrides) ──────
 
@@ -218,9 +219,11 @@ export async function signAndForward(input: SignAndForwardInput): Promise<Respon
 
   // Build the header set to sign. host + content-type are always present;
   // x-* / anthropic-* pass through verbatim.
+  const configuredProjectHeaders = projectHeaders(path);
   const headersToSign: Record<string, string> = {
     host,
     "content-type": (headers["content-type"] as string | undefined) ?? "application/json",
+    ...configuredProjectHeaders,
   };
   if (bodyBuf.length > 0) headersToSign["content-length"] = String(bodyBuf.length);
 
@@ -229,7 +232,8 @@ export async function signAndForward(input: SignAndForwardInput): Promise<Respon
     if (
       typeof v === "string" &&
       !DROP_REQUEST.has(lower) &&
-      (lower.startsWith("x-") || lower.startsWith("anthropic-"))
+      !(lower in configuredProjectHeaders) &&
+      (lower.startsWith("x-") || lower.startsWith("anthropic-") || lower === "openai-project")
     ) {
       headersToSign[lower] = v;
     }

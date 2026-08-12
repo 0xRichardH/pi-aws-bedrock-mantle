@@ -19,6 +19,7 @@
 import { discoverModels, fastModels, writeCachedModels, } from "./models.js";
 import { createSigningProxy, PROXY_PORT_CMH, PROXY_PORT_IAD, } from "./proxy.js";
 import { log } from "./log.js";
+import { projectId } from "./config.js";
 /**
  * Bind both region proxies. Each is independent: if one region's proxy fails
  * to bind (e.g. a fixed port is already taken by another process), the other
@@ -82,6 +83,7 @@ export default async function bedrockMantleExtension(pi) {
         cmh_port: setup.cmh?.port,
         iad_port: setup.iad?.port,
         profile: profile ?? "default-credential-chain",
+        project_id: projectId() ?? "default",
     });
     // Register from the cache/fallback synchronously so the model list is
     // available immediately. Live discovery runs in the background.

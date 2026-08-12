@@ -73,6 +73,14 @@ Add to shell init:
 export BEDROCK_MANTLE_AWS_PROFILE=bedrock-mantle
 ```
 
+To scope model discovery and inference to a specific Bedrock project, also set:
+
+```bash
+export BEDROCK_MANTLE_PROJECT_ID=proj_stbnz3nemrsrofpgdzq6
+```
+
+The project ID is sent as `OpenAI-Project` for model discovery and OpenAI-compatible requests, and as `anthropic-workspace-id` for native Anthropic requests. Both headers are included in the SigV4 signature. If unset, Bedrock Mantle uses the account's default project.
+
 > The `credential_process` auto-refreshes credentials on demand — no manual `ada credentials update` needed.
 
 ### 4. Use
