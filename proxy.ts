@@ -15,9 +15,8 @@
  *        Default `port: 0` binds an ephemeral port — each pi process owns
  *        its own, so credentials/state never leak across processes.
  *
- * Two regions are supported in production:
- *   - us-east-2 (CMH)  GPT-5.x + shared OpenAI-style models
- *   - us-east-1 (IAD)  Anthropic Claude
+ * Supported endpoints are us-east-1 (IAD) and us-east-2 (CMH). The extension
+ * chooses the active region before creating a proxy; direct callers pass it.
  */
 
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
@@ -29,7 +28,7 @@ import { maybeDetectEmptyCompletion } from "./empty-completion.js";
 import { fetchWithEmptyRetry, fetchWithStreamingRetry, retryMode } from "./retry.js";
 import { projectHeaders } from "./config.js";
 
-// ─── Port parsing (kept for backward compat with pinned env overrides) ──────
+// ─── Port parsing ──────────────────────────────────────────────────────────
 
 export function parsePortEnv(name: string, defaultPort: number): number {
   const raw = process.env[name];
@@ -54,21 +53,11 @@ export function parsePortEnv(name: string, defaultPort: number): number {
 }
 
 /**
- * Default desired port for the us-east-2 proxy.
- *
- * `0` means "bind an ephemeral port per pi process" (recommended). Set
- * `BEDROCK_MANTLE_PROXY_PORT_CMH=57893` to pin a fixed port if you have an
- * external consumer that needs a stable URL.
+ * Desired port for the configured region's proxy. `0` binds an ephemeral port
+ * per pi process (recommended). Pin a fixed port only when an external consumer
+ * needs a stable local URL.
  */
-export const PROXY_PORT_CMH = parsePortEnv("BEDROCK_MANTLE_PROXY_PORT_CMH", 0);
-
-/**
- * Default desired port for the us-east-1 proxy.
- *
- * `0` means "bind an ephemeral port per pi process" (recommended). Set
- * `BEDROCK_MANTLE_PROXY_PORT_IAD=57891` to pin a fixed port.
- */
-export const PROXY_PORT_IAD = parsePortEnv("BEDROCK_MANTLE_PROXY_PORT_IAD", 0);
+export const PROXY_PORT = parsePortEnv("BEDROCK_MANTLE_PROXY_PORT", 0);
 
 // ─── Header filters ─────────────────────────────────────────────────────────
 

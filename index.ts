@@ -5,11 +5,8 @@
  * Qwen3, Mistral, Kimi, and more — via SigV4 auth. No long-term API key needed.
  *
  * Each pi process binds its own ephemeral-port loopback proxy by default
- * (override with BEDROCK_MANTLE_PROXY_PORT_CMH/IAD if you need a stable URL
- * for an external consumer). Two regions are bridged:
- *
- *   - 127.0.0.1:<cmh>  →  bedrock-mantle.us-east-2.api.aws  (GPT-5.x + shared)
- *   - 127.0.0.1:<iad>  →  bedrock-mantle.us-east-1.api.aws  (Anthropic Claude)
+ * (override with BEDROCK_MANTLE_PROXY_PORT if you need a stable URL).
+ * BEDROCK_MANTLE_REGION, then AWS_REGION, selects the regional endpoint.
  *
  * Anthropic models use pi's anthropic-messages driver, GPT-5.x uses pi's
  * openai-responses driver, and GPT OSS / other OpenAI-compatible models use
@@ -22,73 +19,34 @@ import {
   discoverModels,
   fastModels,
   type PiModelConfig,
-  type ProxyPorts,
+  type ProxyConfig,
   writeCachedModels,
 } from "./models.js";
 import {
   createSigningProxy,
-  PROXY_PORT_CMH,
-  PROXY_PORT_IAD,
+  PROXY_PORT,
   type SigningProxy,
 } from "./proxy.js";
 import { log } from "./log.js";
-import { projectId } from "./config.js";
+import { configuredRegion, projectId } from "./config.js";
 
 interface ProxySetup {
-  cmh: SigningProxy | null;
-  iad: SigningProxy | null;
-  ports: ProxyPorts;
+  proxy: SigningProxy;
+  config: ProxyConfig;
 }
 
-/**
- * Bind both region proxies. Each is independent: if one region's proxy fails
- * to bind (e.g. a fixed port is already taken by another process), the other
- * still starts. The returned `ports` reflect the *actual* bound ports — these
- * are what models.ts uses to build baseUrls.
- */
-async function startProxies(): Promise<ProxySetup> {
-  const [cmhResult, iadResult] = await Promise.allSettled([
-    createSigningProxy("us-east-2", PROXY_PORT_CMH),
-    createSigningProxy("us-east-1", PROXY_PORT_IAD),
-  ]);
-
-  const cmh = cmhResult.status === "fulfilled" ? cmhResult.value : null;
-  const iad = iadResult.status === "fulfilled" ? iadResult.value : null;
-
-  // If a fixed port was requested and is already taken, log enough detail to
-  // diagnose. Ephemeral binds can't fail on EADDRINUSE so this is purely for
-  // operators who pinned a port.
-  if (!cmh && cmhResult.status === "rejected") {
-    log.warn("proxy_bind_failed", { region: "us-east-2", error: cmhResult.reason });
-  }
-  if (!iad && iadResult.status === "rejected") {
-    log.warn("proxy_bind_failed", { region: "us-east-1", error: iadResult.reason });
-  }
-
-  return {
-    cmh,
-    iad,
-    ports: {
-      // 0 means "not bound" — models gated to a missing region will be filtered
-      // out / show with an unreachable baseUrl, which surfaces as a clear
-      // network error rather than a silent failure.
-      cmh: cmh?.port ?? 0,
-      iad: iad?.port ?? 0,
-    },
-  };
+/** Bind the configured region's single signing proxy. */
+async function startProxy(): Promise<ProxySetup> {
+  const region = configuredRegion();
+  const proxy = await createSigningProxy(region, PROXY_PORT);
+  return { proxy, config: { port: proxy.port } };
 }
 
-function registerBedrockMantleProvider(pi: ExtensionAPI, models: PiModelConfig[], ports: ProxyPorts): void {
-  // Pick a baseUrl that points at any live proxy — pi requires a provider-level
-  // baseUrl even though every model overrides it. Prefer the CMH proxy (more
-  // models route there); fall back to IAD; if neither is up, register a stub
-  // baseUrl that will surface ECONNREFUSED on the first request rather than
-  // failing extension load.
-  const fallbackPort = ports.cmh || ports.iad || 0;
+function registerBedrockMantleProvider(pi: ExtensionAPI, models: PiModelConfig[], config: ProxyConfig): void {
 
   pi.registerProvider("bedrock-mantle", {
     name: "Bedrock Mantle",
-    baseUrl: `http://127.0.0.1:${fallbackPort}/v1`,
+    baseUrl: `http://127.0.0.1:${config.port}/v1`,
     api: "openai-completions",
     // apiKey required by pi's schema; unused — SigV4 auth is handled by the proxies.
     apiKey: "sigv4-via-proxy",
@@ -100,29 +58,30 @@ function registerBedrockMantleProvider(pi: ExtensionAPI, models: PiModelConfig[]
 export default async function bedrockMantleExtension(pi: ExtensionAPI): Promise<void> {
   const profile = process.env.BEDROCK_MANTLE_AWS_PROFILE;
 
-  // Bind proxies first so the cache-derived baseUrls reference real ports.
-  const setup = await startProxies();
-
-  if (!setup.cmh && !setup.iad) {
-    log.error("startup_failed", { reason: "both_proxies_failed" });
+  // Bind the proxy first so cache-derived baseUrls reference its actual port.
+  let setup: ProxySetup;
+  try {
+    setup = await startProxy();
+  } catch (err) {
+    log.error("startup_failed", { error: err });
     return;
   }
 
   log.info("ready", {
-    cmh_port: setup.cmh?.port,
-    iad_port: setup.iad?.port,
+    port: setup.proxy.port,
     profile: profile ?? "default-credential-chain",
     project_id: projectId() ?? "default",
+    region: configuredRegion(),
   });
 
   // Register from the cache/fallback synchronously so the model list is
   // available immediately. Live discovery runs in the background.
-  registerBedrockMantleProvider(pi, fastModels(setup.ports), setup.ports);
+  registerBedrockMantleProvider(pi, fastModels(setup.config), setup.config);
 
   void (async () => {
     try {
-      const models = await discoverModels(setup.ports);
-      registerBedrockMantleProvider(pi, models, setup.ports);
+      const models = await discoverModels(setup.config);
+      registerBedrockMantleProvider(pi, models, setup.config);
       try {
         writeCachedModels(models);
       } catch (err) {

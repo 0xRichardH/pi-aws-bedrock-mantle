@@ -15,27 +15,17 @@
  *        Default `port: 0` binds an ephemeral port — each pi process owns
  *        its own, so credentials/state never leak across processes.
  *
- * Two regions are supported in production:
- *   - us-east-2 (CMH)  GPT-5.x + shared OpenAI-style models
- *   - us-east-1 (IAD)  Anthropic Claude
+ * Supported endpoints are us-east-1 (IAD) and us-east-2 (CMH). The extension
+ * chooses the active region before creating a proxy; direct callers pass it.
  */
 import { type Server } from "node:http";
 export declare function parsePortEnv(name: string, defaultPort: number): number;
 /**
- * Default desired port for the us-east-2 proxy.
- *
- * `0` means "bind an ephemeral port per pi process" (recommended). Set
- * `BEDROCK_MANTLE_PROXY_PORT_CMH=57893` to pin a fixed port if you have an
- * external consumer that needs a stable URL.
+ * Desired port for the configured region's proxy. `0` binds an ephemeral port
+ * per pi process (recommended). Pin a fixed port only when an external consumer
+ * needs a stable local URL.
  */
-export declare const PROXY_PORT_CMH: number;
-/**
- * Default desired port for the us-east-1 proxy.
- *
- * `0` means "bind an ephemeral port per pi process" (recommended). Set
- * `BEDROCK_MANTLE_PROXY_PORT_IAD=57891` to pin a fixed port.
- */
-export declare const PROXY_PORT_IAD: number;
+export declare const PROXY_PORT: number;
 export interface SignAndForwardInput {
     /** HTTP method. Defaults to "POST" if not set. */
     method?: string;

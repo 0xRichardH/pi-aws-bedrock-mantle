@@ -25,9 +25,9 @@ Falls back to a curated static list if discovery fails (expired creds at startup
 
 ## How it works
 
-1. At startup, the extension binds two **per-process loopback proxies on ephemeral ports** (one for each region: us-east-2/CMH, us-east-1/IAD). Each pi process owns its own proxies — no singleton state shared across processes, no port conflicts, no stale credentials surviving across long-lived consumers.
-2. The proxies sign every inbound request with SigV4 (using `BEDROCK_MANTLE_AWS_PROFILE` if set, else the default credential chain) and forward it to `bedrock-mantle.us-east-{1,2}.api.aws`.
-3. Live model discovery runs in the background — `/v1/models` queried in both regions, results merged. While discovery runs, pi uses a cached or curated fallback list so startup never blocks.
+1. At startup, the extension binds one **per-process loopback proxy on an ephemeral port** for the configured region. Each pi process owns its proxy — no singleton state, port conflicts, or stale credentials shared across processes.
+2. The proxy signs every inbound request with SigV4 (using `BEDROCK_MANTLE_AWS_PROFILE` if set, else the default credential chain) and forwards it to `bedrock-mantle.<region>.api.aws`.
+3. Live model discovery runs in the background — `/v1/models` is queried in the configured region. While discovery runs, pi uses a cached or curated fallback list so startup never blocks.
 4. Pi routes each model to the right driver based on the model id:
    - Anthropic Claude → `anthropic-messages` via `/anthropic/v1/messages`
    - GPT-5.x → `openai-responses` via `/openai/v1/responses`
@@ -73,11 +73,20 @@ Add to shell init:
 export BEDROCK_MANTLE_AWS_PROFILE=bedrock-mantle
 ```
 
-To scope model discovery and inference to a specific Bedrock project, also set:
+Select the region and, optionally, scope model discovery and inference to a specific Bedrock project:
 
 ```bash
+export AWS_REGION=us-east-1
 export BEDROCK_MANTLE_PROJECT_ID=proj_stbnz3nemrsrofpgdzq6
 ```
+
+`BEDROCK_MANTLE_REGION` overrides `AWS_REGION` when this extension needs a different region from other AWS tooling:
+
+```bash
+export BEDROCK_MANTLE_REGION=us-east-1
+```
+
+The region is required. The extension discovers models only in that region and routes every model family through its regional signing proxy. Startup fails with a clear configuration error if neither `AWS_REGION` nor `BEDROCK_MANTLE_REGION` is set.
 
 The project ID is sent as `OpenAI-Project` for model discovery and OpenAI-compatible requests, and as `anthropic-workspace-id` for native Anthropic requests. Both headers are included in the SigV4 signature. If unset, Bedrock Mantle uses the account's default project.
 
@@ -112,7 +121,7 @@ The extension and proxy first honor `BEDROCK_MANTLE_AWS_PROFILE` via `fromIni({ 
 
 **HTTP 403** — account not allowlisted for bedrock-mantle.
 
-**Proxy port conflict** — by default, each pi process binds its own ephemeral ports, so port conflicts are impossible. If you've explicitly pinned `BEDROCK_MANTLE_PROXY_PORT_CMH` or `BEDROCK_MANTLE_PROXY_PORT_IAD` to a fixed value (e.g. for an external consumer that needs a stable URL), and that port is taken, change the value or unset the env var to fall back to ephemeral.
+**Proxy port conflict** — by default, each pi process binds one ephemeral port, so port conflicts are impossible. If you've explicitly pinned `BEDROCK_MANTLE_PROXY_PORT` to a fixed value (e.g. for an external consumer that needs a stable URL), and that port is taken, change the value or unset the env var to fall back to ephemeral.
 
 ## Logging
 

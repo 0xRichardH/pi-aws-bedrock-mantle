@@ -1,24 +1,12 @@
 /**
  * Model spec registry and live discovery for bedrock-mantle.
  *
- * Queries both us-east-1 and us-east-2 in parallel and merges the results.
- * Each model is assigned the correct API type and proxy baseUrl:
+ * Queries the configured region and assigns each model its API type. Every
+ * model baseUrl uses the same per-process signing proxy port:
  *
- *   - Anthropic models (us-east-1 only):
- *       api: "anthropic-messages"
- *       baseUrl: http://localhost:57891/anthropic   (pi appends /v1/messages)
- *       headers: { anthropic-version: "2023-06-01" }
- *
- *   - GPT-5.x models:
- *       api: "openai-responses"
- *       baseUrl: http://localhost:57893/openai/v1   (pi appends /responses)
- *
- *   - Other OpenAI-compatible models:
- *       api: "openai-completions"
- *       baseUrl: http://localhost:57893/v1          (pi appends /chat/completions)
- *
- *   OpenAI-compatible route preference is us-east-2 when available, with
- *   fallback to us-east-1 for models only available there.
+ *   - Anthropic models: `anthropic-messages` via `/anthropic`
+ *   - GPT-5.x models: `openai-responses` via `/openai/v1`
+ *   - Other OpenAI-compatible models: `openai-completions` via `/v1`
  */
 
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
@@ -28,18 +16,11 @@ import { Sha256 } from "@aws-crypto/sha256-js";
 import { fromIni, fromNodeProviderChain } from "@aws-sdk/credential-providers";
 import { SignatureV4 } from "@smithy/signature-v4";
 import { log } from "./log.js";
-import { projectHeaders, projectId } from "./config.js";
+import { configuredRegion, projectHeaders, projectId, type MantleRegion } from "./config.js";
 
-/**
- * Bound proxy ports for the two regions. Used both to construct per-model
- * baseUrls and to invalidate stale caches when the ports change between runs
- * (e.g. ephemeral ports change every restart, fixed ports stay stable).
- */
-export interface ProxyPorts {
-  /** us-east-2 (CMH) — GPT-5.x and shared OpenAI-style models. */
-  cmh: number;
-  /** us-east-1 (IAD) — Anthropic Claude. */
-  iad: number;
+/** Actual bound port for the configured region's signing proxy. */
+export interface ProxyConfig {
+  port: number;
 }
 
 export interface PiModelConfig {
@@ -57,40 +38,36 @@ export interface PiModelConfig {
 }
 
 interface CachedModels {
-  version: 3;
+  version: 4;
   generatedAt: number;
   /** Project whose model list was discovered; null means the account default. */
   projectId: string | null;
+  /** Region whose model list was discovered. */
+  region: MantleRegion;
   /**
    * Cached entries store baseUrls relative to a port placeholder rather than
    * the literal port that was bound at the time of write — see
-   * `serializeForCache` / `rehydrateFromCache`. The recorded `proxyPorts`
-   * reflect the *requested* (env-pinned) ports so a cache written under
-   * `BEDROCK_MANTLE_PROXY_PORT_CMH=57893` is not reused after the user removes
-   * that pin.
+   * `serializeForCache` / `rehydrateFromCache`. The recorded `proxyPort`
+   * reflects the requested env-pinned port so a pinned-port cache is not reused
+   * after the user removes that pin.
    */
-  proxyPorts: ProxyPorts;
-  /** Models with placeholder baseUrls (`{{CMH}}` / `{{IAD}}`). */
+  proxyPort: number;
+  /** Models with a `{{PROXY_PORT}}` placeholder in baseUrls. */
   models: PiModelConfig[];
 }
 
-const CACHE_VERSION = 3;
+const CACHE_VERSION = 4;
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const CACHE_ENV = "BEDROCK_MANTLE_MODEL_CACHE";
-const CMH_PLACEHOLDER = "{{CMH_PORT}}";
-const IAD_PLACEHOLDER = "{{IAD_PORT}}";
+const PROXY_PORT_PLACEHOLDER = "{{PROXY_PORT}}";
 
 /**
- * The pinned ports requested via env (0 = ephemeral). Used as the cache-key
- * dimension so a cache written when the user pinned ports doesn't get reused
- * after they un-pin (or vice versa). The actual bound ports go into baseUrls
- * via `applyPorts`.
+ * The pinned port requested via env (0 = ephemeral). Used as a cache-key
+ * dimension so a cache written with a pinned port isn't reused after unpinning.
+ * The actual bound port goes into baseUrls via `applyPort`.
  */
-function requestedPorts(): ProxyPorts {
-  return {
-    cmh: Number(process.env.BEDROCK_MANTLE_PROXY_PORT_CMH ?? 0) || 0,
-    iad: Number(process.env.BEDROCK_MANTLE_PROXY_PORT_IAD ?? 0) || 0,
-  };
+function requestedPort(): number {
+  return Number(process.env.BEDROCK_MANTLE_PROXY_PORT ?? 0) || 0;
 }
 
 function cachePath(): string {
@@ -117,8 +94,8 @@ function parseCachedModels(raw: string): CachedModels | null {
     if (parsed.version !== CACHE_VERSION) return null;
     if (typeof parsed.generatedAt !== "number") return null;
     if (parsed.projectId !== (projectId() ?? null)) return null;
-    const want = requestedPorts();
-    if (parsed.proxyPorts?.cmh !== want.cmh || parsed.proxyPorts?.iad !== want.iad) return null;
+    if (parsed.region !== configuredRegion()) return null;
+    if (parsed.proxyPort !== requestedPort()) return null;
     if (!Array.isArray(parsed.models) || !parsed.models.every(isModelConfig)) return null;
     return parsed as CachedModels;
   } catch {
@@ -127,16 +104,14 @@ function parseCachedModels(raw: string): CachedModels | null {
 }
 
 /**
- * Replace `{{CMH_PORT}}` / `{{IAD_PORT}}` placeholders in baseUrls with the
- * actual bound ports for this process. Called when reading from cache and
+ * Replace the proxy-port placeholder in baseUrls with the actual bound port
+ * for this process. Called when reading from cache and
  * when building the fallback model list.
  */
-function applyPorts(models: PiModelConfig[], ports: ProxyPorts): PiModelConfig[] {
+function applyPort(models: PiModelConfig[], config: ProxyConfig): PiModelConfig[] {
   return models.map((m) => {
     if (!m.baseUrl) return m;
-    const baseUrl = m.baseUrl
-      .replace(CMH_PLACEHOLDER, String(ports.cmh))
-      .replace(IAD_PLACEHOLDER, String(ports.iad));
+    const baseUrl = m.baseUrl.replace(PROXY_PORT_PLACEHOLDER, String(config.port));
     return { ...m, baseUrl };
   });
 }
@@ -161,25 +136,22 @@ function readRawCachedModels(options: { maxAgeMs?: number } = {}): PiModelConfig
 }
 
 export function readCachedModels(
-  ports: ProxyPorts,
+  config: ProxyConfig,
   options: { maxAgeMs?: number } = {},
 ): PiModelConfig[] | null {
   const raw = readRawCachedModels(options);
-  return raw ? applyPorts(raw, ports) : null;
+  return raw ? applyPort(raw, config) : null;
 }
 
 export function writeCachedModels(models: PiModelConfig[]): void {
   const path = cachePath();
   mkdirSync(dirname(path), { recursive: true });
-  // Strip the bound ports out of baseUrls before persisting — bound ports
-  // change every run when ephemeral, but the routing logic (which port goes
-  // with which region/api) is stable.
+  // Strip the bound port out of baseUrls before persisting — ephemeral ports
+  // change every run while the configured region/API routing stays stable.
   const sanitized = models.map((m) => {
     if (!m.baseUrl) return m;
-    const isAnthropic = m.api === "anthropic-messages";
-    const placeholder = isAnthropic ? IAD_PLACEHOLDER : CMH_PLACEHOLDER;
     // Replace any 1-5-digit port immediately after `127.0.0.1:` with the placeholder.
-    const baseUrl = m.baseUrl.replace(/(127\.0\.0\.1:)\d+/, `$1${placeholder}`);
+    const baseUrl = m.baseUrl.replace(/(127\.0\.0\.1:)\d+/, `$1${PROXY_PORT_PLACEHOLDER}`);
     return { ...m, baseUrl };
   });
   const tmp = `${path}.${process.pid}.${Date.now()}.tmp`;
@@ -187,19 +159,20 @@ export function writeCachedModels(models: PiModelConfig[]): void {
     version: CACHE_VERSION,
     generatedAt: Date.now(),
     projectId: projectId() ?? null,
-    proxyPorts: requestedPorts(),
+    region: configuredRegion(),
+    proxyPort: requestedPort(),
     models: sanitized,
   }, null, 2));
   renameSync(tmp, path);
 }
 
-export function fastModels(ports: ProxyPorts): PiModelConfig[] {
+export function fastModels(config: ProxyConfig): PiModelConfig[] {
   // Prefer a fresh cache, then a stale cache, then the curated static list.
-  // The cache stores baseUrls with port placeholders; applyPorts substitutes
-  // the actual bound ports for this process.
-  return readCachedModels(ports, { maxAgeMs: CACHE_TTL_MS })
-    ?? readCachedModels(ports)
-    ?? applyPorts(FALLBACK_MODELS_RAW, ports);
+  // The cache stores baseUrls with a port placeholder; applyPort substitutes
+  // the actual bound port for this process.
+  return readCachedModels(config, { maxAgeMs: CACHE_TTL_MS })
+    ?? readCachedModels(config)
+    ?? applyPort(FALLBACK_MODELS_RAW, config);
 }
 
 // ─── Known specs ─────────────────────────────────────────────────────────────
@@ -213,7 +186,7 @@ interface ModelSpec {
 }
 
 const KNOWN: Record<string, ModelSpec> = {
-  // OpenAI GPT-5 — us-east-2 only
+  // OpenAI GPT-5
   "openai.gpt-5.5":              { contextWindow: 272000, maxTokens: 128000, reasoning: true,  input: ["text", "image"], thinkingLevelMap: { off: null, xhigh: "xhigh" } },
   "openai.gpt-5.5-2026-04-23":   { contextWindow: 272000, maxTokens: 128000, reasoning: true,  input: ["text", "image"], thinkingLevelMap: { off: null, xhigh: "xhigh" } },
   // Context windows increased to 1M: https://aws.amazon.com/about-aws/whats-new/2026/08/gpt-sol-terra-luna-long-context-bedrock/
@@ -227,7 +200,7 @@ const KNOWN: Record<string, ModelSpec> = {
   "openai.gpt-oss-20b":            { contextWindow: 128000, maxTokens: 16384, reasoning: false, input: ["text"] },
   "openai.gpt-oss-safeguard-120b": { contextWindow: 128000, maxTokens: 4096,  reasoning: false, input: ["text"] },
   "openai.gpt-oss-safeguard-20b":  { contextWindow: 128000, maxTokens: 4096,  reasoning: false, input: ["text"] },
-  // Anthropic — us-east-1 only
+  // Anthropic
   // opus-4-7: adaptive thinking (reasoning summaries via display:summarized); effort levels low/medium/high/xhigh
   "anthropic.claude-opus-4-7":   { contextWindow: 1000000, maxTokens: 32000,  reasoning: true,  input: ["text", "image"], thinkingLevelMap: { minimal: "low", low: "low", medium: "medium", high: "high", xhigh: "xhigh" } },
   // opus-4-8: adaptive thinking (1M context); budget-based extended thinking
@@ -253,12 +226,6 @@ const KNOWN: Record<string, ModelSpec> = {
   "qwen.qwen3-next-80b-a3b-instruct":     { contextWindow: 131072, maxTokens: 32768, reasoning: true,  input: ["text"] },
   "qwen.qwen3-vl-235b-a22b-instruct":     { contextWindow: 131072, maxTokens: 32768, reasoning: true,  input: ["text", "image"] },
 };
-
-const ANTHROPIC_IDS = new Set([
-  "anthropic.claude-opus-4-7",
-  "anthropic.claude-opus-4-8",
-  "anthropic.claude-haiku-4-5",
-]);
 
 // ─── Heuristics for unknown models ───────────────────────────────────────────
 
@@ -311,9 +278,8 @@ function displayName(id: string): string {
 }
 
 // ─── Route assignment ─────────────────────────────────────────────────────────
-// openai.gpt-5.* (and dated variants)  → openai-responses  on us-east-2
-// anthropic.*                          → anthropic-messages on us-east-1
-// everything else                      → openai-completions  on us-east-2 (or us-east-1 fallback)
+// API selection is model-family based. Region selection is configuration based:
+// BEDROCK_MANTLE_REGION > AWS_REGION.
 
 function isOpenAIResponses(id: string): boolean {
   // Only the GPT-5 family uses the Responses API — gpt-oss-* and all other
@@ -323,10 +289,10 @@ function isOpenAIResponses(id: string): boolean {
 
 /**
  * Build a model config with placeholder baseUrls. The placeholder port is
- * substituted with the actual bound port via `applyPorts` either at cache
+ * substituted with the actual bound port via `applyPort` either at cache
  * read time or when fastModels()/discoverModels() returns.
  */
-function buildConfig(id: string, regions: Set<string>): PiModelConfig {
+function buildConfig(id: string): PiModelConfig {
   const spec = KNOWN[id] ?? inferSpec(id);
   const isAnthropic = id.startsWith("anthropic.");
 
@@ -338,16 +304,18 @@ function buildConfig(id: string, regions: Set<string>): PiModelConfig {
   };
 
   if (isAnthropic) {
-    // Anthropic Messages API on us-east-1 proxy.
+    // Anthropic Messages API through the configured region's proxy.
     return {
       ...base,
       api: "anthropic-messages",
-      baseUrl: `http://127.0.0.1:${IAD_PLACEHOLDER}/anthropic`,
+      baseUrl: `http://127.0.0.1:${PROXY_PORT_PLACEHOLDER}/anthropic`,
       headers: { "anthropic-version": "2023-06-01" },
     };
   }
 
-  const placeholder = regions.has("us-east-2") ? CMH_PLACEHOLDER : IAD_PLACEHOLDER;
+  // Raw configs use a neutral placeholder. applyPort resolves it to the one
+  // configured region before models are registered with pi.
+  const placeholder = PROXY_PORT_PLACEHOLDER;
 
   if (isOpenAIResponses(id)) {
     // GPT-5.x family: uses the OpenAI Responses API.
@@ -369,7 +337,9 @@ function buildConfig(id: string, regions: Set<string>): PiModelConfig {
 
 // ─── Live discovery ───────────────────────────────────────────────────────────
 
-const REGIONS = ["us-east-1", "us-east-2"] as const;
+function discoveryRegions(): readonly MantleRegion[] {
+  return [configuredRegion()];
+}
 
 async function fetchRegionModels(region: string): Promise<string[]> {
   const host = `bedrock-mantle.${region}.api.aws`;
@@ -396,38 +366,37 @@ async function fetchRegionModels(region: string): Promise<string[]> {
   return data.data.map((m) => m.id);
 }
 
-export async function discoverModels(ports: ProxyPorts): Promise<PiModelConfig[]> {
-  const results = await Promise.allSettled(REGIONS.map(fetchRegionModels));
+export async function discoverModels(config: ProxyConfig): Promise<PiModelConfig[]> {
+  const regions = discoveryRegions();
+  const results = await Promise.allSettled(regions.map(fetchRegionModels));
 
   // Map model id → set of regions it's available in
   const modelRegions = new Map<string, Set<string>>();
-  for (let i = 0; i < REGIONS.length; i++) {
+  for (let i = 0; i < regions.length; i++) {
     const result = results[i];
     if (result.status !== "fulfilled") continue;
     for (const id of result.value) {
       if (!modelRegions.has(id)) modelRegions.set(id, new Set());
-      modelRegions.get(id)!.add(REGIONS[i]);
+      modelRegions.get(id)!.add(regions[i]);
     }
   }
 
   if (modelRegions.size === 0) {
     const reasons = results.map((result, i) => {
-      if (result.status === "fulfilled") return `${REGIONS[i]}: no models returned`;
+      if (result.status === "fulfilled") return `${regions[i]}: no models returned`;
       const reason = result.reason instanceof Error ? result.reason.message : String(result.reason);
-      return `${REGIONS[i]}: ${reason}`;
+      return `${regions[i]}: ${reason}`;
     });
     throw new Error(`All regions failed (${reasons.join("; ")})`);
   }
 
-  const placeholderConfigs = Array.from(modelRegions.entries()).map(([id, regions]) =>
-    buildConfig(id, regions)
-  );
-  return applyPorts(placeholderConfigs, ports);
+  const placeholderConfigs = Array.from(modelRegions.keys()).map(buildConfig);
+  return applyPort(placeholderConfigs, config);
 }
 
-export async function fetchModels(ports: ProxyPorts): Promise<PiModelConfig[]> {
+export async function fetchModels(config: ProxyConfig): Promise<PiModelConfig[]> {
   try {
-    const models = await discoverModels(ports);
+    const models = await discoverModels(config);
     writeCachedModels(models);
     return models;
   } catch (err) {
@@ -436,23 +405,20 @@ export async function fetchModels(ports: ProxyPorts): Promise<PiModelConfig[]> {
       fallback: "curated_static_list",
       hint: "refresh credentials and restart pi for the live model list",
     });
-    return applyPorts(FALLBACK_MODELS_RAW, ports);
+    return applyPort(FALLBACK_MODELS_RAW, config);
   }
 }
 
 // ─── Fallback ─────────────────────────────────────────────────────────────────
 
 /**
- * Curated fallback list with port placeholders. Use `applyPorts` (or `fastModels`)
- * to substitute actual bound ports before passing to pi.
+ * Curated fallback list with a port placeholder. Use `fastModels`
+ * to substitute the actual bound port before passing to pi.
  */
-export const FALLBACK_MODELS_RAW: PiModelConfig[] = Object.keys(KNOWN).map((id) => {
-  const regions = new Set(ANTHROPIC_IDS.has(id) ? ["us-east-1"] : ["us-east-2"]);
-  return buildConfig(id, regions);
-});
+export const FALLBACK_MODELS_RAW: PiModelConfig[] = Object.keys(KNOWN).map(buildConfig);
 
 /**
- * @deprecated Use `fastModels(ports)` or `applyPorts(FALLBACK_MODELS_RAW, ports)`.
- * Retained as the placeholder list for callers that don't have ports yet.
+ * @deprecated Use `fastModels(config)`.
+ * Retained as the placeholder list for callers that don't have a port yet.
  */
 export const FALLBACK_MODELS = FALLBACK_MODELS_RAW;

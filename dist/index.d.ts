@@ -5,11 +5,8 @@
  * Qwen3, Mistral, Kimi, and more — via SigV4 auth. No long-term API key needed.
  *
  * Each pi process binds its own ephemeral-port loopback proxy by default
- * (override with BEDROCK_MANTLE_PROXY_PORT_CMH/IAD if you need a stable URL
- * for an external consumer). Two regions are bridged:
- *
- *   - 127.0.0.1:<cmh>  →  bedrock-mantle.us-east-2.api.aws  (GPT-5.x + shared)
- *   - 127.0.0.1:<iad>  →  bedrock-mantle.us-east-1.api.aws  (Anthropic Claude)
+ * (override with BEDROCK_MANTLE_PROXY_PORT if you need a stable URL).
+ * BEDROCK_MANTLE_REGION, then AWS_REGION, selects the regional endpoint.
  *
  * Anthropic models use pi's anthropic-messages driver, GPT-5.x uses pi's
  * openai-responses driver, and GPT OSS / other OpenAI-compatible models use
