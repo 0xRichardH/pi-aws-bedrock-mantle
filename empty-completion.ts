@@ -38,8 +38,7 @@ export interface EmptyCompletionContext {
   path: string;
   /**
    * Optional: the original request body bytes. When `BEDROCK_MANTLE_EMPTY_DUMP_DIR`
-   * is set, this is captured alongside the empty response so we can replay
-   * the exact request that triggered the failure.
+   * is set, this is captured alongside the response for local diagnosis.
    */
   requestBody?: Buffer | string;
 }
@@ -208,8 +207,7 @@ function handleSseEvent(event: SseEvent, ctx: EmptyCompletionContext): void {
 
 /**
  * When `BEDROCK_MANTLE_EMPTY_DUMP_DIR` is set, write the full parsed
- * response.completed payload to `<dir>/empty-<requestId>.json`. Used as a
- * forensic tap when we're chasing the root cause of empty completions.
+ * response.completed payload to `<dir>/empty-<requestId>.json` for diagnosis.
  *
  * Failure to write is logged at debug — we never want diagnostic plumbing to
  * affect the user-visible response.

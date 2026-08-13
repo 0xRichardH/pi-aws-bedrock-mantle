@@ -73,7 +73,7 @@ describe("inspectResponseCompleted", () => {
   });
 
   test("does NOT flag a reasoning + function_call turn (tool call is actionable, even with no message)", () => {
-    // The canonical gpt-5.5 *success* shape from the forensics: reasoning then
+    // A canonical GPT-5 success shape: reasoning then
     // a function_call, no message text. Must never be treated as empty.
     const verdict = inspectResponseCompleted({
       response: {

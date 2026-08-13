@@ -1,21 +1,14 @@
 /**
  * Optional empty-completion retry for `/openai/v1/responses`.
  *
- * Background: gpt-5.5 has a measured ~10–20% stochastic empty-completion rate
- * on tool-using requests via the OpenAI Responses API. The same exact request
- * (same bytes, same SigV4 signature) produces a `function_call` 80–90% of the
- * time and zero output items 10–20% of the time. See
- * `forensics-2026-06-07/findings.md`.
- *
- * This module wraps `signAndForward` with a buffer-and-retry layer:
+ * This module wraps `signAndForward` with a retry layer:
  *
  *   1. First attempt streams as usual into a memory buffer.
  *   2. We parse the buffered SSE terminal event and decide whether to retry:
  *        - empty completion  (`response.completed` with no actionable output), or
  *        - transient failure (`response.failed` with a server-side error code
  *          like `server_error` — a 5xx surfaced as an SSE event mid-stream;
- *          observed on gpt-5.5 even after a complete function_call. See
- *          `forensics-2026-06-07/findings.md`).
+ *          observed on gpt-5.5 even after a complete function_call).
  *   3. If retryable AND retry mode is on, re-sign and re-issue the same
  *      request once. Single retry — no infinite loop.
  *   4. The buffered (or retried-buffered) bytes are reconstructed into a
@@ -28,11 +21,8 @@
  * adds latency equal to the full response time. Acceptable for agent
  * flows.
  *
- * Scope: buffer-and-retry engages by default for ALL `/openai/v1/responses`
- * traffic (the gpt-5.x family is where the empty-completion bug is measured;
- * see `forensics-2026-06-07/findings.md`, but applying it everywhere on the
- * responses path is harmless — non-empty responses pass through after a
- * single attempt).
+ * Scope: retry handling applies to all `/openai/v1/responses` traffic.
+ * Non-empty responses pass through after a single attempt.
  *
  * Override with the env flag:
  *   - BEDROCK_MANTLE_EMPTY_COMPLETION_RETRY=0  → force retry OFF (use for
@@ -103,7 +93,7 @@ function isOpenAIResponsesPath(path) {
     return /^\/openai\/v1\/responses(\?|$|\/)/.test(path);
 }
 /**
- * Sign + forward a single request, with optional buffer-and-retry on
+ * Sign + forward a single request, with optional retry handling on
  * empty-completion failures from gpt-5.x via openai-responses.
  *
  * When retry is not applicable (mode off, non-openai-responses path, or
@@ -119,9 +109,8 @@ export async function fetchWithEmptyRetry(input, ctx) {
     const ct = (first.headers.get("content-type") ?? "").toLowerCase();
     if (!ct.includes("text/event-stream")) {
         // Streaming openai-responses requests should come back as SSE. A 200
-        // non-SSE response is anomalous and a candidate empty-completion variant
-        // (pi's driver expects a stream and sees nothing) — capture it for
-        // forensics when a dump dir is configured. Errors (4xx/5xx) are expected
+        // A non-SSE 200 response is anomalous for this endpoint. Capture it for
+        // diagnosis when a dump dir is configured; errors (4xx/5xx) are expected
         // to be non-SSE and pass through untouched.
         if (first.status === 200 && first.body && process.env.BEDROCK_MANTLE_EMPTY_DUMP_DIR) {
             const buf = await bufferResponse(first);
@@ -146,7 +135,7 @@ export async function fetchWithEmptyRetry(input, ctx) {
     const verdict1 = inspectBufferedSse(buffered.text);
     const reason1 = retryReason(verdict1);
     if (!reason1) {
-        // Not retryable. Two sub-cases worth capturing for forensics:
+        // Not retryable. Two sub-cases are still useful to capture for diagnosis:
         if (verdict1.failed) {
             // A terminal response.failed with a non-transient (client-side) error
             // code — retrying won't help, so pass it through, but record it.
@@ -194,7 +183,7 @@ export async function fetchWithEmptyRetry(input, ctx) {
     // Log the outcome. No second retry — single bounded attempt, no loop.
     logRetryOutcome(ctx, reason1, verdict2);
     // If the retry didn't recover, capture the failing request body + response
-    // for forensics. input.body is the exact Bedrock request (all input items,
+    // for diagnosis. input.body is the exact Bedrock request (all input items,
     // tools, accumulated reasoning), which is what we need to diagnose the
     // "fails consistently after N turns" pattern.
     const recovered = verdict2.found && !verdict2.empty;
@@ -459,7 +448,7 @@ function rebuildResponse(original, bytes) {
 /**
  * When `BEDROCK_MANTLE_EMPTY_DUMP_DIR` is set, write the raw buffered response
  * bytes plus the originating request body to
- * `<dir>/<label>-<requestId>.json`. Used to capture empty-completion variants
+ * `<dir>/<label>-<requestId>.json` for diagnosis of anomalous responses.
  * (no-terminal SSE, non-SSE 200) that the passive detector / verdict logic
  * doesn't flag, so we can analyse the exact shape and extend handling.
  *
@@ -506,8 +495,7 @@ function maybeDumpBuffer(ctx, label, bytes, requestBody) {
  * Transient `response.failed` error codes worth a single retry. gpt-5.x on
  * Bedrock intermittently ends a stream with `response.failed` carrying a
  * `server_error` (a 5xx surfaced as an SSE event rather than an HTTP status)
- * even after emitting a complete function_call — see
- * `forensics-2026-06-07/findings.md`. These are upstream instability, not a
+ * even after emitting a complete function_call — these are upstream instability, not a
  * client problem, so retrying the identical request usually succeeds.
  */
 const RETRYABLE_FAILED_CODES = new Set([

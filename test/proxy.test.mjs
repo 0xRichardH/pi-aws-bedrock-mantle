@@ -337,7 +337,7 @@ describe("startProxy (legacy)", () => {
     const originalFetch = globalThis.fetch;
     const restoreEnv = installDummyAwsEnv();
     // This test asserts raw incremental streaming on the openai-responses path,
-    // which requires the buffer-and-retry layer off (it's on by default).
+    // which requires retry handling to be disabled (it's on by default).
     const savedRetry = process.env.BEDROCK_MANTLE_EMPTY_COMPLETION_RETRY;
     process.env.BEDROCK_MANTLE_EMPTY_COMPLETION_RETRY = "0";
     const encoder = new TextEncoder();

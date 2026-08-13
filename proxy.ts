@@ -324,8 +324,8 @@ function makeHandler(region: string) {
         requestId: reqId,
         region,
         path: req.url ?? "/",
-        // Pass the raw request body so dumps can include the exact prompt
-        // that triggered the empty response, for replay/forensics.
+        // Pass the raw request body so optional diagnostic dumps include the
+        // exact request that triggered the empty response.
         requestBody: bodyBuf,
       });
       const upstream = detection.response;

@@ -128,7 +128,7 @@ The extension and proxy first honor `BEDROCK_MANTLE_AWS_PROFILE` via `fromIni({ 
 The extension logs to stderr with a leveled, key=value format:
 
 ```
-[bedrock-mantle] level=info kind=ready cmh_port=54321 iad_port=54322 profile=openclaw-bedrock
+[bedrock-mantle] level=info kind=ready port=54321 profile=openclaw-bedrock project_id=default region=us-east-2
 [bedrock-mantle] level=debug kind=request id=Az3kP9 region=us-east-2 method=POST path=/openai/v1/responses status=200 latency_ms=412 bytes_in=2851 bytes_out=18432
 [bedrock-mantle] level=warn kind=request id=Bx7mQ2 region=us-east-1 status=403 latency_ms=98
 ```
@@ -169,111 +169,32 @@ grep empty_completion ~/.pi/logs/bedrock-mantle.log
 If the file can't be written, the sink disables itself after one warning and
 stderr logging continues unaffected.
 
-### Empty-completion detection
+### Empty Responses API completions
 
-GPT-5.x via the OpenAI Responses API has a measured ~10–20% stochastic
-failure rate on tool-using requests — the model returns zero output items
-with `output_tokens: 0` and `stop_reason: "completed"`. The same exact
-request succeeds 80–90% of the time and produces nothing the rest. To pi
-(and any agent loop) this looks like a clean "done" with nothing to
-render, and the slot exits silently mid-turn. Forensics:
-`forensics-2026-06-07/findings.md`.
+The proxy watches `/openai/v1/responses` streams for completions with no
+actionable output. It retries once by default, including transient upstream
+`response.failed` events, and never retries more than once. The response is
+streamed live whenever no content has been sent yet.
 
-The proxy detects this pattern on `/openai/v1/responses` SSE streams without
-modifying the response. When detected, it emits a warn-level log line
-correlated to the request id:
+Control retries with `BEDROCK_MANTLE_EMPTY_COMPLETION_RETRY`:
 
-```
-[bedrock-mantle] level=warn kind=empty_completion id=Az3kP9 region=us-east-2
-  model=openai.gpt-5.5 output_tokens=0 reasoning_tokens=0
-  output_item_types= stop_reason=completed
-  hint="model returned no message content after tool use; lower reasoning effort or raise max_output_tokens"
-```
+| Value | Behavior |
+|---|---|
+| unset, `stream`, `1`, `on` | Streaming retry (default) |
+| `buffer`, `full` | Buffer the response and retry even after content |
+| `0`, `false`, `off` | Disable retries and pass responses through |
 
-The upstream bytes are passed to the client unchanged — detection is
-observability only, never a transformation. Pi (or operators reading the
-log) can decide whether to retry, surface the error to the user, or adjust
-the reasoning-effort knob.
+The proxy logs empty, non-terminal, and transient-failure retry events with
+request IDs. For local diagnosis, set `BEDROCK_MANTLE_EMPTY_DUMP_DIR`:
 
-### Empty-completion retry (streaming-preserving, on by default)
-
-The proxy retries a `/openai/v1/responses` request once when the first attempt
-is an empty completion (or a transient `response.failed`). Empirically takes the
-user-visible empty rate from ~10–20% to ~1–2%. One retry max — no infinite loop.
-
-Three modes, via `BEDROCK_MANTLE_EMPTY_COMPLETION_RETRY`:
-
-| Value | Mode | Streaming? | Retry? |
-|-------|------|-----------|--------|
-| unset / `stream` / `1` / `on` | **stream (default)** | ✅ live | ✅ empty + transient-fail, *before* any content |
-| `buffer` / `full` | buffer | ❌ one burst | ✅ empty + transient-fail, even after a complete function_call |
-| `0` / `false` / `off` | off | ✅ live | ❌ |
-
-**stream mode (default)** holds back only the head events (`response.created`,
-`response.in_progress`, and any leading `reasoning` item — a few hundred bytes).
-The instant the turn commits to actionable output (a `message` item, any
-`*_call`, or a text/argument delta), it flushes the head and streams the rest
-live. An empty completion never emits an actionable event, so it's caught with
-nothing sent to the client and retried. Measured on gpt-5.5: first-byte ~2s with
-tokens streaming over wall-clock, vs. buffer mode's ~15s stall-then-burst for
-the same response.
-
-**buffer mode** buffers the entire SSE end-to-end before forwarding (pi sees a
-single burst). Slightly more robust: it can also retry a transient
-`response.failed` that arrives *after* a complete function_call, which stream
-mode cannot (those bytes are already sent). Use it only if you'd rather have max
-reliability than streaming.
-
-**Tradeoff of stream mode:** a transient `response.failed` that surfaces *after*
-content has already streamed can't be retried (the client has the bytes). Empty
-completions are always recoverable since they emit no content. Switch to
-`buffer` if you hit frequent post-content transient failures.
-
-Log lines on retry (both modes):
-
-```
-[bedrock-mantle] level=warn kind=empty_completion_retry id=… attempt=1 action=retrying
-[bedrock-mantle] level=info kind=empty_completion_retry id=… attempt=2 outcome=recovered
-[bedrock-mantle] level=warn kind=empty_completion_retry id=… attempt=2 outcome=still_empty   # rare
-```
-
-### Capturing empty-completion variants (`BEDROCK_MANTLE_EMPTY_DUMP_DIR`)
-
-Not every empty manifests as a `response.completed` with empty output. Two
-other shapes are passed through (not retried) but **captured** for forensics
-when `BEDROCK_MANTLE_EMPTY_DUMP_DIR` is set:
-
-- **`no_terminal`** — a buffered openai-responses SSE stream that closed with
-  no parseable `response.completed` event (logged `kind=empty_completion_no_terminal`).
-- **`non_sse`** — a 200 reply that wasn't `text/event-stream` at all (logged
-  `kind=empty_completion_non_sse`).
-
-```
+```bash
 BEDROCK_MANTLE_EMPTY_DUMP_DIR=~/.pi/logs/empty-dumps
 ```
 
-Each capture writes `<dir>/<label>-<requestId>.json` with the full request
-body and raw response bytes, so the exact shape can be analysed before
-extending retry to cover it. Detected empties (`kind=empty_completion`) are
-also dumped here. Errors (4xx/5xx) are never dumped.
+Captures can contain full prompts, tool definitions, and request metadata.
+Keep them outside the repository and delete them after diagnosis. Search the
+file sink with:
 
-### Transient `response.failed` retry
-
-gpt-5.x on Bedrock intermittently ends an openai-responses stream with a
-terminal `response.failed` event carrying a server-side error code (e.g.
-`server_error`) — a 5xx surfaced as an SSE event mid-stream, sometimes *after*
-emitting a complete `function_call`. pi sees no `response.completed` and
-reports "Provider returned an empty stream".
-
-The same buffer-and-retry layer now treats this as retryable: a terminal
-`response.failed` whose error code is transient (`server_error`,
-`internal_error`, `rate_limit_exceeded`, `service_unavailable`,
-`server_overloaded`, `overloaded_error`, `timeout`, or no code) is re-issued
-once. Client-side failures (`invalid_request_error`, content filter, …) pass
-through untouched. Logged as `kind=upstream_failed_retry`:
-
-```
-[bedrock-mantle] level=warn kind=upstream_failed_retry id=… error_code=server_error attempt=1 action=retrying
-[bedrock-mantle] level=info kind=upstream_failed_retry id=… attempt=2 outcome=recovered
-[bedrock-mantle] level=warn kind=upstream_failed_retry id=… attempt=2 outcome=still_failed   # rare
+```bash
+grep -E 'empty_completion|upstream_failed_retry' ~/.pi/logs/bedrock-mantle.log
 ```

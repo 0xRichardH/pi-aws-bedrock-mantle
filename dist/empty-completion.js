@@ -168,8 +168,7 @@ function handleSseEvent(event, ctx) {
 }
 /**
  * When `BEDROCK_MANTLE_EMPTY_DUMP_DIR` is set, write the full parsed
- * response.completed payload to `<dir>/empty-<requestId>.json`. Used as a
- * forensic tap when we're chasing the root cause of empty completions.
+ * response.completed payload to `<dir>/empty-<requestId>.json` for diagnosis.
  *
  * Failure to write is logged at debug — we never want diagnostic plumbing to
  * affect the user-visible response.
