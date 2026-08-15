@@ -1,13 +1,14 @@
 {
-  "name": "pi-bedrock-mantle",
+  "name": "pi-aws-bedrock-mantle",
   "private": false,
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Pi extension: all Bedrock Mantle models (GPT-5.5, DeepSeek, Qwen3, Mistral, Kimi, ...) via SigV4 — no long-term API key needed",
-  "author": "Sam Fanning",
+  "author": "Richard Hao <richard@0xdev.dev>",
   "license": "MIT",
   "keywords": [
-    "pi",
+    "pi-package",
     "pi-extension",
+    "pi",
     "bedrock",
     "bedrock-mantle",
     "gpt-5",
@@ -17,13 +18,18 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/samfoy/pi-bedrock-mantle.git"
+    "url": "git+https://github.com/0xRichardH/pi-aws-bedrock-mantle.git"
   },
+  "bugs": {
+    "url": "https://github.com/0xRichardH/pi-aws-bedrock-mantle/issues"
+  },
+  "homepage": "https://github.com/0xRichardH/pi-aws-bedrock-mantle#readme",
   "type": "module",
   "scripts": {
     "clean": "rm -rf dist .tmp-test",
     "build": "npm run clean && tsc --noEmit false --outDir dist --rootDir .",
     "check": "tsc --noEmit",
+    "prepack": "npm run build",
     "test": "rm -rf .tmp-test && tsc --noEmit false --outDir .tmp-test --rootDir . && BEDROCK_MANTLE_LOG_FILE= BEDROCK_MANTLE_EMPTY_DUMP_DIR= node --test test/*.test.mjs"
   },
   "files": [

@@ -1,4 +1,4 @@
-# pi-bedrock-mantle
+# pi-aws-bedrock-mantle
 
 Pi extension: all [Amazon Bedrock Mantle](https://bedrock-mantle.us-east-2.api.aws) models (GPT-5.5, DeepSeek, Qwen3, Mistral, Kimi, and more) with **SigV4 auth** — no long-term API key needed.
 
@@ -40,10 +40,13 @@ Falls back to a curated static list if discovery fails (expired creds at startup
 
 ```bash
 # Via pi (recommended)
-pi install npm:pi-bedrock-mantle
+pi install npm:pi-aws-bedrock-mantle
+
+# Or via GitHub
+pi install git:github.com/0xRichardH/pi-aws-bedrock-mantle
 
 # Or manually
-npm install -g pi-bedrock-mantle
+npm install -g pi-aws-bedrock-mantle
 ```
 
 ### 2. Register with pi
@@ -52,7 +55,7 @@ If installed via `pi install`, it's already active. Otherwise add to `~/.pi/sett
 
 ```json
 {
-  "packages": ["npm:pi-bedrock-mantle"]
+  "packages": ["npm:pi-aws-bedrock-mantle"]
 }
 ```
 
