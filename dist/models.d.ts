@@ -5,7 +5,7 @@
  * model baseUrl uses the same per-process signing proxy port:
  *
  *   - Anthropic models: `anthropic-messages` via `/anthropic`
- *   - GPT-5.x models: `openai-responses` via `/openai/v1`
+ *   - GPT-5.x / GPT-6 models: `openai-responses` via `/openai/v1`
  *   - Other OpenAI-compatible models: `openai-completions` via `/v1`
  */
 /** Actual bound port for the configured region's signing proxy. */

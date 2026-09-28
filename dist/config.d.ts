@@ -6,7 +6,7 @@ export declare const REGION_ENV = "BEDROCK_MANTLE_REGION";
  * wins over the standard AWS region. A region is required because project
  * availability and SigV4 signing are region-specific.
  */
-export type MantleRegion = "us-east-1" | "us-east-2";
+export type MantleRegion = "us-east-1" | "us-east-2" | "us-west-2";
 export declare function configuredRegion(): MantleRegion;
 /** Return the configured Bedrock project ID, treating blank values as unset. */
 export declare function projectId(): string | undefined;

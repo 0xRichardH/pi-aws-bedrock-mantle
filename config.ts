@@ -8,7 +8,7 @@ export const REGION_ENV = "BEDROCK_MANTLE_REGION";
  * wins over the standard AWS region. A region is required because project
  * availability and SigV4 signing are region-specific.
  */
-export type MantleRegion = "us-east-1" | "us-east-2";
+export type MantleRegion = "us-east-1" | "us-east-2" | "us-west-2";
 
 export function configuredRegion(): MantleRegion {
   const mantleRegion = process.env[REGION_ENV]?.trim();
@@ -19,11 +19,11 @@ export function configuredRegion(): MantleRegion {
       `[bedrock-mantle] Region is required; set AWS_REGION or ${REGION_ENV}.`
     );
   }
-  if (value === "us-east-1" || value === "us-east-2") return value;
+  if (value === "us-east-1" || value === "us-east-2" || value === "us-west-2") return value;
 
   const source = mantleRegion ? REGION_ENV : "AWS_REGION";
   throw new Error(
-    `[bedrock-mantle] Invalid ${source}=${JSON.stringify(value)}; expected "us-east-1" or "us-east-2".`
+    `[bedrock-mantle] Invalid ${source}=${JSON.stringify(value)}; expected "us-east-1", "us-east-2", or "us-west-2".`
   );
 }
 

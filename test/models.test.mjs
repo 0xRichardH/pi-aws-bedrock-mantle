@@ -87,6 +87,19 @@ test("GPT-5 models route through OpenAI Responses with image input and GPT-5 thi
   }
 });
 
+test("GPT-6 Sol, Luna, and Astra use Responses with their published specs", () => {
+  for (const id of ["openai.gpt-6-sol", "openai.gpt-6-luna", "openai.gpt-6-astra"]) {
+    const model = fallbackById(id);
+    assert.equal(model.api, "openai-responses");
+    assert.equal(model.baseUrl, `http://127.0.0.1:${TEST_PROXY.port}/openai/v1`);
+    assert.deepEqual(model.input, ["text", "image"]);
+    assert.equal(model.reasoning, true);
+    assert.deepEqual(model.thinkingLevelMap, { off: null, xhigh: "xhigh" });
+    assert.equal(model.contextWindow, 1_050_000);
+    assert.equal(model.maxTokens, 128_000);
+  }
+});
+
 test("GPT OSS models route through OpenAI Chat Completions without image input", () => {
   for (const id of ["openai.gpt-oss-120b", "openai.gpt-oss-20b"]) {
     const model = fallbackById(id);
@@ -142,9 +155,10 @@ test("BEDROCK_MANTLE_REGION overrides AWS_REGION for discovery and routing", asy
   });
 });
 
-test("only the OpenAI GPT-5 family uses Responses routing", () => {
+test("only the OpenAI GPT-5 and GPT-6 families use Responses routing", () => {
   assert.equal(fallbackById("openai.gpt-5.5").api, "openai-responses");
   assert.equal(fallbackById("openai.gpt-5.5-2026-04-23").api, "openai-responses");
+  assert.equal(fallbackById("openai.gpt-6-astra").api, "openai-responses");
   assert.equal(fallbackById("openai.gpt-oss-120b").api, "openai-completions");
   assert.equal(fallbackById("qwen.qwen3-vl-235b-a22b-instruct").api, "openai-completions");
 });
@@ -155,12 +169,34 @@ test("unknown model inference keeps vision and reasoning heuristics explicit", a
       { id: "qwen.future-vl-model" },
       { id: "moonshotai.future-thinking" },
       { id: "openai.gpt-5.6" },
+      { id: "openai.gpt-6-future" },
     ] }), { status: 200, headers: { "content-type": "application/json" } });
   }, async () => {
     const models = await fetchModels(TEST_PROXY);
     assert.deepEqual(models.find((model) => model.id === "qwen.future-vl-model")?.input, ["text", "image"]);
     assert.equal(models.find((model) => model.id === "moonshotai.future-thinking")?.reasoning, true);
     assert.deepEqual(models.find((model) => model.id === "openai.gpt-5.6")?.thinkingLevelMap, { off: null, xhigh: "xhigh" });
+    const future = models.find((model) => model.id === "openai.gpt-6-future");
+    assert.equal(future?.api, "openai-responses");
+    assert.equal(future?.reasoning, true);
+    assert.deepEqual(future?.input, ["text", "image"]);
+    assert.deepEqual(future?.thinkingLevelMap, { off: null, xhigh: "xhigh" });
+  });
+});
+
+test("GPT-6 Astra is discovered and routed through us-west-2", async () => {
+  await withMockedFetch((url) => {
+    assert.equal(url, "https://bedrock-mantle.us-west-2.api.aws/v1/models");
+    return new Response(JSON.stringify({ data: [{ id: "openai.gpt-6-astra" }] }), {
+      status: 200, headers: { "content-type": "application/json" },
+    });
+  }, async () => {
+    process.env.BEDROCK_MANTLE_REGION = "us-west-2";
+    const models = await fetchModels(TEST_PROXY);
+    assert.equal(models[0]?.id, "openai.gpt-6-astra");
+    assert.equal(models[0]?.api, "openai-responses");
+    assert.equal(models[0]?.baseUrl, `http://127.0.0.1:${TEST_PROXY.port}/openai/v1`);
+    assert.equal(models[0]?.contextWindow, 1_050_000);
   });
 });
 

@@ -8,10 +8,10 @@ export function configuredRegion() {
     if (!value) {
         throw new Error(`[bedrock-mantle] Region is required; set AWS_REGION or ${REGION_ENV}.`);
     }
-    if (value === "us-east-1" || value === "us-east-2")
+    if (value === "us-east-1" || value === "us-east-2" || value === "us-west-2")
         return value;
     const source = mantleRegion ? REGION_ENV : "AWS_REGION";
-    throw new Error(`[bedrock-mantle] Invalid ${source}=${JSON.stringify(value)}; expected "us-east-1" or "us-east-2".`);
+    throw new Error(`[bedrock-mantle] Invalid ${source}=${JSON.stringify(value)}; expected "us-east-1", "us-east-2", or "us-west-2".`);
 }
 /** Return the configured Bedrock project ID, treating blank values as unset. */
 export function projectId() {

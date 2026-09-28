@@ -31,6 +31,12 @@ test("blank BEDROCK_MANTLE_REGION falls back to AWS_REGION", () => {
   assert.equal(configuredRegion(), "us-east-2");
 });
 
+test("us-west-2 is supported for GPT-6 Astra", () => {
+  process.env.AWS_REGION = "us-west-2";
+  delete process.env.BEDROCK_MANTLE_REGION;
+  assert.equal(configuredRegion(), "us-west-2");
+});
+
 test("a region is required", () => {
   delete process.env.AWS_REGION;
   delete process.env.BEDROCK_MANTLE_REGION;
@@ -40,5 +46,5 @@ test("a region is required", () => {
 test("unsupported regions fail with a clear configuration error", () => {
   process.env.AWS_REGION = "eu-west-1";
   delete process.env.BEDROCK_MANTLE_REGION;
-  assert.throws(() => configuredRegion(), /Invalid AWS_REGION=.*expected "us-east-1" or "us-east-2"/);
+  assert.throws(() => configuredRegion(), /Invalid AWS_REGION=.*expected "us-east-1", "us-east-2", or "us-west-2"/);
 });

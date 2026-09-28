@@ -2,7 +2,7 @@
   "name": "pi-aws-bedrock-mantle",
   "private": false,
   "version": "1.0.3",
-  "description": "Pi extension: all Bedrock Mantle models (GPT-5.5, DeepSeek, Qwen3, Mistral, Kimi, ...) via SigV4 — no long-term API key needed",
+  "description": "Pi extension: all Bedrock Mantle models (GPT-6, GPT-5.5, DeepSeek, Qwen3, Mistral, Kimi, ...) via SigV4 — no long-term API key needed",
   "author": "Richard Hao <richard@0xdev.dev>",
   "license": "MIT",
   "keywords": [
@@ -12,6 +12,7 @@
     "bedrock",
     "bedrock-mantle",
     "gpt-5",
+    "gpt-6",
     "openai",
     "aws",
     "sigv4"

@@ -5,7 +5,7 @@
  * model baseUrl uses the same per-process signing proxy port:
  *
  *   - Anthropic models: `anthropic-messages` via `/anthropic`
- *   - GPT-5.x models: `openai-responses` via `/openai/v1`
+ *   - GPT-5.x / GPT-6 models: `openai-responses` via `/openai/v1`
  *   - Other OpenAI-compatible models: `openai-completions` via `/v1`
  */
 
@@ -186,6 +186,11 @@ interface ModelSpec {
 }
 
 const KNOWN: Record<string, ModelSpec> = {
+  // GPT-6: 1,050,000 context / 128,000 output (OpenAI model cards).
+  // Mantle availability: Sol/Luna us-east-1, Astra us-west-2 (AWS model cards).
+  "openai.gpt-6-sol":          { contextWindow: 1050000, maxTokens: 128000, reasoning: true,  input: ["text", "image"], thinkingLevelMap: { off: null, xhigh: "xhigh" } },
+  "openai.gpt-6-luna":         { contextWindow: 1050000, maxTokens: 128000, reasoning: true,  input: ["text", "image"], thinkingLevelMap: { off: null, xhigh: "xhigh" } },
+  "openai.gpt-6-astra":        { contextWindow: 1050000, maxTokens: 128000, reasoning: true,  input: ["text", "image"], thinkingLevelMap: { off: null, xhigh: "xhigh" } },
   // OpenAI GPT-5
   "openai.gpt-5.5":              { contextWindow: 272000, maxTokens: 128000, reasoning: true,  input: ["text", "image"], thinkingLevelMap: { off: null, xhigh: "xhigh" } },
   "openai.gpt-5.5-2026-04-23":   { contextWindow: 272000, maxTokens: 128000, reasoning: true,  input: ["text", "image"], thinkingLevelMap: { off: null, xhigh: "xhigh" } },
@@ -231,16 +236,16 @@ const KNOWN: Record<string, ModelSpec> = {
 
 function inferSpec(id: string): ModelSpec {
   const reasoning =
-    id.includes("gpt-5") || id.includes("thinking") || id.includes("kimi-k2") ||
+    id.includes("gpt-5") || id.includes("gpt-6") || id.includes("thinking") || id.includes("kimi-k2") ||
     id.includes("qwq") || id.includes("o1") || id.includes("o3") || id.includes("r1") ||
     id.startsWith("anthropic.");
 
   const hasVision =
     id.includes("vision") || id.includes("-vl-") || id.includes("gemma") ||
-    id.includes("gpt-5") || id.includes("palmyra") || id.startsWith("anthropic.");
+    id.includes("gpt-5") || id.includes("gpt-6") || id.includes("palmyra") || id.startsWith("anthropic.");
 
   const thinkingLevelMap = reasoning
-    ? id.includes("gpt-5")
+    ? id.includes("gpt-5") || id.includes("gpt-6")
       ? { off: null, xhigh: "xhigh" }
       : { minimal: "low", low: "low", medium: "medium", high: "high", xhigh: "xhigh" }
     : undefined;
@@ -282,9 +287,9 @@ function displayName(id: string): string {
 // BEDROCK_MANTLE_REGION > AWS_REGION.
 
 function isOpenAIResponses(id: string): boolean {
-  // Only the GPT-5 family uses the Responses API — gpt-oss-* and all other
+  // GPT-5 and GPT-6 use the Responses API — gpt-oss-* and all other
   // providers use the Chat Completions API instead.
-  return /^openai\.gpt-5\./.test(id);
+  return /^openai\.gpt-(?:5\.|6(?:\.|-))/.test(id);
 }
 
 /**
@@ -318,7 +323,7 @@ function buildConfig(id: string): PiModelConfig {
   const placeholder = PROXY_PORT_PLACEHOLDER;
 
   if (isOpenAIResponses(id)) {
-    // GPT-5.x family: uses the OpenAI Responses API.
+    // GPT-5.x and GPT-6 families: use the OpenAI Responses API.
     return {
       ...base,
       api: "openai-responses",

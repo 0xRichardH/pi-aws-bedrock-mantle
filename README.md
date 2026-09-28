@@ -1,6 +1,6 @@
 # pi-aws-bedrock-mantle
 
-Pi extension: all [Amazon Bedrock Mantle](https://bedrock-mantle.us-east-2.api.aws) models (GPT-5.5, DeepSeek, Qwen3, Mistral, Kimi, and more) with **SigV4 auth** — no long-term API key needed.
+Pi extension: all [Amazon Bedrock Mantle](https://bedrock-mantle.us-east-2.api.aws) models (GPT-6, GPT-5.5, DeepSeek, Qwen3, Mistral, Kimi, and more) with **SigV4 auth** — no long-term API key needed.
 
 ## Why SigV4?
 
@@ -8,9 +8,9 @@ Bedrock-mantle accepts both a long-term `AWS_BEARER_TOKEN_BEDROCK` key *and* sta
 
 ## Models
 
-Dynamically discovered at startup from the live `/v1/models` endpoint. As of June 2026, includes:
+Dynamically discovered at startup from the live `/v1/models` endpoint. Availability depends on the configured region. Models include:
 
-- **OpenAI**: GPT-5.5, GPT-5.4 (+ dated variants), GPT-OSS 120B/20B
+- **OpenAI**: GPT-6 Sol, Luna, Astra; GPT-5.6, GPT-5.5, GPT-5.4 (+ dated variants); GPT-OSS 120B/20B
 - **DeepSeek**: V3.1, V3.2
 - **Qwen3**: 32B, 235B, Coder variants, VL (vision)
 - **Mistral**: Magistral, Devstral, Ministral, Voxtral
@@ -21,7 +21,7 @@ Dynamically discovered at startup from the live `/v1/models` endpoint. As of Jun
 - **ZAI**: GLM-4.6, GLM-4.7, GLM-5
 - **Writer**: Palmyra Vision 7B
 
-Falls back to a curated static list if discovery fails (expired creds at startup).
+Falls back to a curated static list if discovery fails (expired creds at startup). GPT-6 Sol and Luna are available on Mantle in `us-east-1`; GPT-6 Astra is available on Mantle in `us-west-2`. Set `BEDROCK_MANTLE_REGION` accordingly. The static fallback list isn't filtered by regional availability.
 
 ## How it works
 
@@ -30,7 +30,7 @@ Falls back to a curated static list if discovery fails (expired creds at startup
 3. Live model discovery runs in the background — `/v1/models` is queried in the configured region. While discovery runs, pi uses a cached or curated fallback list so startup never blocks.
 4. Pi routes each model to the right driver based on the model id:
    - Anthropic Claude → `anthropic-messages` via `/anthropic/v1/messages`
-   - GPT-5.x → `openai-responses` via `/openai/v1/responses`
+   - GPT-5.x and GPT-6 → `openai-responses` via `/openai/v1/responses`
    - GPT OSS and other OpenAI-compatible models → `openai-completions` via `/v1/chat/completions`
 5. Streaming SSE responses are piped back to pi unchanged.
 
@@ -89,7 +89,7 @@ export BEDROCK_MANTLE_PROJECT_ID=proj_stbnz3nemrsrofpgdzq6
 export BEDROCK_MANTLE_REGION=us-east-1
 ```
 
-The region is required. The extension discovers models only in that region and routes every model family through its regional signing proxy. Startup fails with a clear configuration error if neither `AWS_REGION` nor `BEDROCK_MANTLE_REGION` is set.
+The region is required (`us-east-1`, `us-east-2`, or `us-west-2`). The extension discovers models only in that region and routes every model family through its regional signing proxy. Startup fails with a clear configuration error if neither `AWS_REGION` nor `BEDROCK_MANTLE_REGION` is set.
 
 The project ID is sent as `OpenAI-Project` for model discovery and OpenAI-compatible requests, and as `anthropic-workspace-id` for native Anthropic requests. Both headers are included in the SigV4 signature. If unset, Bedrock Mantle uses the account's default project.
 
